@@ -8,8 +8,7 @@ The course is designed for students of the programm "Sociology and Social Inform
 
 
 ## Syllabus
-- [Week 1](https://github.com/Esquire-of-Rohan/da_sociology_2026/tree/main/Week1) | **Mode, median, mean and some visualizations**
-
+- [Week 1](https://github.com/Esquire-of-Rohan/da_sociology_2026/tree/main/Week%201) | **Mode, median, mean and some visualizations**
 
 
 ## Author of the course

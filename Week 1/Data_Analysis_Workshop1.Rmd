@@ -1,0 +1,562 @@
+---
+title: "Data Analysis for Sociology: Practical Workshop"
+subtitle: "Central Tendency, Visualizations, and Introduction to Paired Tests"
+author: "Ilya Lyapin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 5
+)
+```
+
+# Introduction
+
+This R Markdown document accompanies the Data Analysis for Sociology seminar. We will work through the concepts covered in the lecture using real data from the **World Happiness Report**.
+
+The World Happiness Report is a landmark survey of the state of global happiness that ranks countries by how happy their citizens perceive themselves to be. It examines factors like GDP, social support, life expectancy, freedom, generosity, and corruption.
+
+**Data Source:** World Happiness Report 2017, available from the JASP Data Library
+**URL:** `https://raw.githubusercontent.com/jasp-stats/jasp-data-library/main/World%20Happiness/World%20Happiness.csv`
+
+## Learning Objectives
+
+By the end of this workshop, you will be able to:
+
+1. Load real sociological data directly from the web in R
+2. Calculate and interpret central tendency measures
+3. Create informative visualizations
+4. Understand when to use each measure
+5. Perform a basic paired t-test
+
+---
+
+# Setup: Loading Required Packages
+
+First, let's load the packages we will need:
+
+```{r load-packages}
+# install.packages(c("tidyverse", "ggplot2", "dplyr", "knitr", "psych"))
+
+library(tidyverse)  
+library(ggplot2)    
+library(dplyr)      
+library(knitr)      
+library(psych)
+```
+
+---
+
+# Part 1: Loading Real-World Data
+
+## 1.1 Loading the World Happiness Report Data
+
+One of the most important skills is loading data directly from online sources. We'll use the `read.csv()` function with a URL:
+
+```{r load-data}
+url <- "https://raw.githubusercontent.com/jasp-stats/jasp-data-library/main/World Happiness/World Happiness.csv"
+happiness_data <- read.csv(URLencode(url))
+
+
+
+cat("Number of countries:", nrow(happiness_data), "\n")
+cat("Number of variables:", ncol(happiness_data), "\n")
+```
+
+
+
+## 1.2 First Look at the Data
+
+Let's perform preliminary data analysis as discussed in the lecture:
+
+```{r explore-data}
+# View first few rows
+head(happiness_data, 10)
+```
+
+```{r data-structure}
+# Check data structure
+str(happiness_data)
+```
+
+**Variable Descriptions:**
+
+- **Country**: Name of the country
+- **Happiness.Rank**: Global ranking (1 = happiest)
+- **Happiness.Score**: Score on a scale of approximately 0-10
+- **GDP.per.Capita**: Contribution of GDP to happiness score
+- **Family**: Contribution of social support to happiness
+- **Life.Expectancy**: Contribution of healthy life expectancy
+- **Freedom**: Perceived freedom to make life choices
+- **Generosity**: Donation behavior
+- **Government.Corruption**: Perception of corruption (higher = less corruption perceived)
+
+```{r summary-stats}
+
+summary(happiness_data)
+
+```
+
+---
+
+# Part 2: Central Tendency Measures
+
+## 2.1 The Mode
+
+The mode is the most frequently occurring value. For continuous data like happiness scores, we can look at which score range appears most often:
+
+```{r mode-function}
+# Unfortunately, there is no built-in function for mode in R, that is quite sad, but don't despair since we can create a custom function
+calculate_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+# For continuous data, we can round to find the modal range
+happiness_rounded <- round(happiness_data$Happiness.Score, 0)
+mode_happiness <- calculate_mode(happiness_rounded)
+cat("Modal happiness score (rounded):", mode_happiness, "\n")
+cat("Number of countries in this range:", sum(happiness_rounded == mode_happiness), "\n")
+```
+
+```{r mode-distribution}
+happiness_data$Happiness.Score_rounded <- happiness_rounded
+
+happiness_data %>% 
+  filter(Happiness.Score_rounded == 8) 
+```
+
+## 2.2 The Mean
+
+The mean is the arithmetic average—sensitive to outliers but uses all data points.
+
+```{r mean-examples}
+cat("Mean Happiness Score:", round(mean(happiness_data$Happiness.Score), 3), "\n")
+cat("Mean GDP per Capita contribution:", round(mean(happiness_data$GDP.per.Capita), 3), "\n")
+cat("Mean Family/Social Support:", round(mean(happiness_data$Family), 3), "\n")
+cat("Mean Life Expectancy contribution:", round(mean(happiness_data$Life.Expectancy), 3), "\n")
+cat("Mean Freedom:", round(mean(happiness_data$Freedom), 3), "\n")
+cat("Mean Generosity:", round(mean(happiness_data$Generosity), 3), "\n")
+```
+
+## 2.3 The Median
+
+The median is the middle value—robust to outliers.
+
+```{r median-examples}
+cat("Median Happiness Score:", round(median(happiness_data$Happiness.Score), 3), "\n")
+cat("Median GDP per Capita contribution:", round(median(happiness_data$GDP.per.Capita), 3), "\n")
+cat("Median Family/Social Support:", round(median(happiness_data$Family), 3), "\n")
+cat("Median Life Expectancy contribution:", round(median(happiness_data$Life.Expectancy), 3), "\n")
+cat("Median Freedom:", round(median(happiness_data$Freedom), 3), "\n")
+cat("Median Generosity:", round(median(happiness_data$Generosity), 3), "\n")
+```
+
+## 2.4 Comparing Mean and Median: Detecting Skewness
+
+When mean and median differ substantially, it indicates skewness in the data.
+
+```{r compare-measures}
+
+comparison <- data.frame(
+  Variable = c("Happiness Score", "GDP per Capita", "Family", 
+               "Life Expectancy", "Freedom", "Generosity"),
+  Mean = c(mean(happiness_data$Happiness.Score), 
+           mean(happiness_data$GDP.per.Capita),
+           mean(happiness_data$Family), 
+           mean(happiness_data$Life.Expectancy),
+           mean(happiness_data$Freedom), 
+           mean(happiness_data$Generosity)),
+  Median = c(median(happiness_data$Happiness.Score), 
+             median(happiness_data$GDP.per.Capita),
+             median(happiness_data$Family), 
+             median(happiness_data$Life.Expectancy),
+             median(happiness_data$Freedom), 
+             median(happiness_data$Generosity))
+)
+
+comparison$Difference <- comparison$Mean - comparison$Median
+comparison$Percent_Diff <- round((comparison$Mean - comparison$Median) / comparison$Median * 100, 1)
+
+kable(comparison, digits = 3, caption = "Comparison of Mean and Median")
+```
+
+**Discussion:** Variables where mean is approximately equal to median suggest symmetric distributions. Variables where mean differs from median suggest skewed distributions.
+
+---
+
+# Part 3: Data Visualization
+
+## 3.1 Histogram
+
+Histograms show the distribution shape of continuous variables.
+
+```{r histogram-happiness}
+ggplot(happiness_data, aes(x = Happiness.Score)) +
+  geom_histogram(bins = 20, fill = "steelblue", color = "white", alpha = 0.7) +
+  geom_vline(aes(xintercept = mean(Happiness.Score)), 
+             color = "red", linetype = "dashed", size = 1, show.legend = TRUE) +
+  geom_vline(aes(xintercept = median(Happiness.Score)), 
+             color = "green", linetype = "dashed", size = 1, show.legend = TRUE) +
+  labs(title = "Distribution of Happiness Scores Across Countries",
+       subtitle = "Red = Mean, Green = Median",
+       x = "Happiness Score",
+       y = "Number of Countries") +
+  
+  scale_color_manual(values = c("Mean" = "red", "Median" = "green")) +
+  theme_minimal() + theme(legend.position = "top")
+```
+
+```{r histogram-gdp}
+# GDP per Capita histogram
+ggplot(happiness_data, aes(x = GDP.per.Capita)) +
+  geom_histogram(bins = 20, fill = "coral", color = "white", alpha = 0.7) +
+  geom_vline(aes(xintercept = mean(GDP.per.Capita)), 
+             color = "red", linetype = "dashed", size = 1) +
+  geom_vline(aes(xintercept = median(GDP.per.Capita)), 
+             color = "green", linetype = "dashed", size = 1) +
+  labs(title = "Distribution of GDP per Capita Contribution",
+       subtitle = "Red = Mean, Green = Median",
+       x = "GDP per Capita",
+       y = "Number of Countries") +
+  theme_minimal()
+```
+
+## 3.2 Boxplot
+
+Boxplots are excellent for comparing distributions and identifying outliers.
+
+```{r boxplot-factors}
+
+factors_long <- happiness_data %>%
+  select(Country, GDP.per.Capita, Family, Life.Expectancy, 
+         Freedom, Generosity, Government.Corruption) %>%
+  pivot_longer(cols = -Country, 
+               names_to = "Factor", 
+               values_to = "Contribution")
+
+ggplot(factors_long, aes(x = Factor, y = Contribution, fill = Factor)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Contribution of Different Factors to Happiness",
+       x = "Factor",
+       y = "Contribution to Happiness Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  scale_fill_brewer(palette = "Set2")
+```
+
+## 3.3 Scatterplot
+
+Scatterplots reveal relationships between two continuous variables.
+
+```{r scatterplot-gdp}
+
+ggplot(happiness_data, aes(x = GDP.per.Capita, y = Happiness.Score)) +
+  geom_point(alpha = 0.6, color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(title = "Relationship Between GDP and Happiness",
+       subtitle = paste("Correlation:", 
+                        round(cor(happiness_data$GDP.per.Capita, 
+                                  happiness_data$Happiness.Score), 3)),
+       x = "GDP per Capita",
+       y = "Happiness Score") +
+  theme_minimal()
+```
+
+```{r scatterplot-freedom}
+
+ggplot(happiness_data, aes(x = Freedom, y = Happiness.Score)) +
+  geom_point(alpha = 0.6, color = "darkgreen", size = 3) +
+  geom_smooth(method = "lm", color = "orange", se = TRUE) +
+  labs(title = "Relationship Between Freedom and Happiness",
+       subtitle = paste("Correlation:", 
+                        round(cor(happiness_data$Freedom, 
+                                  happiness_data$Happiness.Score), 3)),
+       x = "Freedom",
+       y = "Happiness Score") +
+  theme_minimal()
+```
+
+## 3.4 Barplot
+
+Let's look at the top and bottom 10 countries:
+
+```{r barplot-top10}
+# Top 10 happiest countries
+top10 <- happiness_data %>%
+  arrange(Happiness.Rank) %>%
+  head(10)
+
+ggplot(top10, aes(x = reorder(Country, -Happiness.Score), y = Happiness.Score, 
+                  fill = Happiness.Score)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "Top 10 Happiest Countries",
+       x = "Country",
+       y = "Happiness Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  coord_cartesian(ylim = c(0, 8))
+```
+
+```{r barplot-bottom10}
+# Bottom 10 countries
+bottom10 <- happiness_data %>%
+  arrange(desc(Happiness.Rank)) %>%
+  head(10)
+
+ggplot(bottom10, aes(x = reorder(Country, Happiness.Score), y = Happiness.Score, 
+                     fill = Happiness.Score)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  scale_fill_gradient(low = "darkred", high = "lightsalmon") +
+  labs(title = "Bottom 10 Countries by Happiness",
+       x = "Country",
+       y = "Happiness Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  coord_cartesian(ylim = c(0, 8))
+```
+
+---
+
+# Part 4: Connection to Deeper Statistics
+
+## 4.1 From Mean to Variance and Standard Deviation
+
+```{r variance-sd}
+happiness_mean <- mean(happiness_data$Happiness.Score)
+happiness_var <- var(happiness_data$Happiness.Score)
+happiness_sd <- sd(happiness_data$Happiness.Score)
+
+cat("Happiness Score Statistics:\n")
+cat("Mean:", round(happiness_mean, 3), "\n")
+cat("Variance:", round(happiness_var, 3), "\n")
+cat("Standard Deviation:", round(happiness_sd, 3), "\n")
+cat("\nInterpretation: Most countries have happiness scores within one SD of the mean:\n")
+cat("Range:", round(happiness_mean - happiness_sd, 3), 
+    " to", round(happiness_mean + happiness_sd, 3), "\n")
+
+within_1sd <- sum(happiness_data$Happiness.Score >= (happiness_mean - happiness_sd) & 
+                  happiness_data$Happiness.Score <= (happiness_mean + happiness_sd))
+cat("Countries within 1 SD:", within_1sd, "out of", nrow(happiness_data), 
+    "(", round(within_1sd/nrow(happiness_data)*100, 1), "%)\n")
+```
+
+## 4.2 Comprehensive Descriptive Statistics
+
+```{r descriptive-stats}
+describe(happiness_data[, c("Happiness.Score", "GDP.per.Capita", "Family", 
+                            "Life.Expectancy", "Freedom", "Generosity")])
+
+
+?describe
+```
+
+
+# Part 5: Preview of Paired Tests
+
+## 5.1 Creating Paired Data: Comparing Factors Within Countries
+
+For paired tests, we need related measurements. Let's compare different happiness factors within each country - specifically GDP contribution vs Freedom contribution.
+
+```{r paired-data-setup}
+
+
+paired_comparison <- happiness_data %>%
+  select(Country, GDP.per.Capita, Freedom) %>%
+  mutate(
+    GDP_normalized = (GDP.per.Capita - mean(GDP.per.Capita)) / sd(GDP.per.Capita),
+    Freedom_normalized = (Freedom - mean(Freedom)) / sd(Freedom),
+    Difference = GDP_normalized - Freedom_normalized
+  )
+
+head(paired_comparison, 10)
+```
+
+
+
+## 5.2 Performing the Paired t-Test
+
+**Research Question:** Do countries tend to have higher contributions from GDP or from Freedom to their happiness scores (when normalized)?
+
+```{r paired-ttest}
+# Descriptive statistics for the difference
+cat("Descriptive Statistics for GDP - Freedom Difference:\n")
+cat("Mean difference:", round(mean(paired_comparison$Difference), 3), "\n")
+cat("SD of differences:", round(sd(paired_comparison$Difference), 3), "\n")
+cat("Median difference:", round(median(paired_comparison$Difference), 3), "\n")
+
+# Paired t-test
+t_result <- t.test(paired_comparison$GDP_normalized, 
+                   paired_comparison$Freedom_normalized, 
+                   paired = TRUE)
+
+print(t_result)
+```
+
+## 5.3 Interpreting the Results
+
+```{r interpret-results}
+# Effect size (Cohen's d for paired samples)
+cohens_d <- mean(paired_comparison$Difference) / sd(paired_comparison$Difference)
+
+cat("\n=== INTERPRETATION ===\n\n")
+cat("Mean difference (GDP - Freedom, normalized):", 
+    round(mean(paired_comparison$Difference), 3), "\n")
+cat("t-statistic:", round(t_result$statistic, 3), "\n")
+cat("p-value:", format(t_result$p.value, scientific = TRUE, digits = 3), "\n")
+cat("95% CI for mean difference:", round(t_result$conf.int[1], 3), "to", 
+    round(t_result$conf.int[2], 3), "\n")
+cat("Cohen's d (effect size):", round(cohens_d, 3), "\n\n")
+
+if(t_result$p.value < 0.05) {
+  if(mean(paired_comparison$Difference) > 0) {
+    cat("Conclusion: Countries tend to score significantly HIGHER on GDP contribution\n")
+    cat("than on Freedom contribution (p < 0.05).\n")
+  } else {
+    cat("Conclusion: Countries tend to score significantly HIGHER on Freedom contribution\n")
+    cat("than on GDP contribution (p < 0.05).\n")
+  }
+} else {
+  cat("Conclusion: No significant difference between GDP and Freedom contributions.\n")
+}
+```
+
+---
+
+# Exercise - your part!
+
+## Exercise 1: Central Tendency
+
+**Task:** Calculate and compare measures of central tendency for `Life.Expectancy` and `Generosity`.
+
+```{r exercise1, eval=FALSE}
+# YOUR CODE HERE
+
+# 1. Calculate mean and median for Life.Expectancy
+life_mean <- ___
+life_median <- ___
+
+# 2. Calculate mean and median for Generosity
+gen_mean <- ___
+gen_median <- ___
+
+# 3. Which variable shows more skewness? How can you tell?
+# (Write your answer as a comment)
+
+# 4. Create a histogram for each variable showing mean and median
+
+```
+
+
+
+## Exercise 2: Visualization
+
+**Task:** Create visualizations to explore which factors most strongly relate to happiness.
+
+```{r exercise2, eval=FALSE}
+# YOUR CODE HERE
+
+# 1. Create a scatterplot of Family (social support) vs Happiness Score
+
+
+# 2. Calculate the correlation coefficient
+
+
+# 3. Compare this correlation to GDP vs Happiness - which is stronger?
+
+
+# 4. What sociological conclusions might you draw?
+
+```
+
+
+
+## Exercise 3: Country Comparisons
+
+**Task:** Compare the top 10 and bottom 10 countries on specific factors.
+
+```{r exercise3, eval=FALSE}
+# YOUR CODE HERE
+
+# 1. Create separate dataframes for top 10 and bottom 10 countries
+
+
+# 2. Calculate mean values for all factors in each group
+
+
+# 3. Which factor shows the biggest difference between groups?
+
+
+# 4. Create a visualization comparing the two groups
+
+```
+
+
+
+## Exercise 4: Your Own Analysis
+
+**Task:** Formulate and test your own research question using this data.
+
+```{r exercise4, eval=FALSE}
+# YOUR CODE HERE
+
+# 1. Write your research question as a comment
+
+
+# 2. Create appropriate visualizations
+
+
+# 3. Calculate relevant statistics
+
+
+# 4. Write your conclusions
+
+```
+
+
+
+# Summary
+
+In this workshop, we covered:
+
+1. **Loading real-world data** - Using `read.csv()` with URLs to access online datasets
+2. **Central tendency measures** - Mean, median, and mode with World Happiness Report data
+3. **Visualization techniques** - Boxplots, histograms, scatterplots, and barplots
+4. **Connections to deeper statistics** - Variance, standard deviation, and correlation
+5. **Paired t-tests** - Comparing related measurements within countries
+
+## Key Takeaways
+
+- **Real data is messy** but also more meaningful than simulated data
+- **Choose the right measure** of central tendency based on your data type and distribution
+- **Visualizations reveal patterns** that statistics alone might miss
+- **Multiple factors** contribute to complex outcomes like happiness
+- **Paired tests** help us compare related measurements
+
+
+# References
+
+World Happiness Report 2017. Data available from JASP Data Library:
+https://github.com/jasp-stats/jasp-data-library
+
+For more information about the World Happiness Report, visit:
+https://worldhappiness.report/
+

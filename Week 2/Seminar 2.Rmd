@@ -1,0 +1,678 @@
+---
+title: "Data Analysis in Sociology - Seminar 2"
+author: "Ilya Lyapin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required packages
+library(tidyverse)
+library(ggplot2)
+library(car)        
+library(psych)      
+library(emmeans)    
+library(lubridate)  
+```
+
+# 0. Loading and Preparing the Dataset
+
+We'll use a real dataset on **beer consumption in São Paulo, Brazil** (2015). This dataset contains daily records of temperature, precipitation, and beer consumption — perfect for exploring relationships between weather, social factors (weekends), and consumption behavior.
+
+```{r load-data}
+# Load the data
+beer_raw <- read.csv("Consumo_cerveja.csv", stringsAsFactors = FALSE)
+
+# Check structure
+head(beer_raw)
+str(beer_raw)
+```
+
+```{r clean-data}
+# Note: Brazilian CSV uses comma as decimal separator
+
+beer <- beer_raw %>%
+  # Renaming columns to English
+  rename(
+    date = Data,
+    temp_mean = Temperatura.Media..C.,
+    temp_min = Temperatura.Minima..C.,
+    temp_max = Temperatura.Maxima..C.,
+    precipitation = Precipitacao..mm.,
+    is_weekend = Final.de.Semana,
+    beer_consumption = Consumo.de.cerveja..litros.
+  ) %>%
+  # Converting comma decimals to proper numbers
+  mutate(
+    across(c(temp_mean, temp_min, temp_max, precipitation), 
+           ~as.numeric(gsub(",", ".", .))),
+    date = as.Date(date, format = "%Y-%m-%d"),
+    # Creating factors
+    is_weekend = factor(is_weekend, levels = c(0, 1), labels = c("Weekday", "Weekend")),
+    # Extracting time variables
+    month = month(date, label = TRUE),
+    day_of_week = wday(date, label = TRUE),
+    quarter = quarter(date),
+    quarter_label = factor(quarter, levels = 1:4, 
+                           labels = c("Q1 (Jan-Mar)", "Q2 (Apr-Jun)", 
+                                     "Q3 (Jul-Sep)", "Q4 (Oct-Dec)"))
+  ) %>%
+  # Removing rows with NA
+  drop_na()
+
+# Creating additional categorical variables for analysis
+beer <- beer %>%
+  mutate(
+    # Temperature categories
+    temp_category = cut(temp_mean, 
+                        breaks = c(-Inf, 20, 25, 30, Inf),
+                        labels = c("Cold (<20°C)", "Mild (20-25°C)", 
+                                  "Warm (25-30°C)", "Hot (>30°C)")),
+    # Precipitation categories
+    rain_category = case_when(
+      precipitation == 0 ~ "No rain",
+      precipitation < 5 ~ "Light rain",
+      precipitation < 20 ~ "Moderate rain",
+      TRUE ~ "Heavy rain"
+    ) %>% factor(levels = c("No rain", "Light rain", "Moderate rain", "Heavy rain")),
+    # Season
+    season = case_when(
+      month %in% c("Dec", "Jan", "Feb") ~ "Summer",
+      month %in% c("Mar", "Apr", "May") ~ "Autumn",
+      month %in% c("Jun", "Jul", "Aug") ~ "Winter",
+      month %in% c("Sep", "Oct", "Nov") ~ "Spring"
+    ) %>% factor(levels = c("Summer", "Autumn", "Winter", "Spring"))
+  )
+
+head(beer, 10)
+glimpse(beer)
+```
+
+```{r descriptive-stats}
+# Quick overview of numeric variables
+beer %>%
+  select(temp_mean, temp_min, temp_max, precipitation, beer_consumption) %>%
+  describe()
+
+# Summary by weekend
+beer %>%
+  group_by(is_weekend) %>%
+  summarise(
+    n = n(),
+    mean_consumption = mean(beer_consumption),
+    sd_consumption = sd(beer_consumption),
+    mean_temp = mean(temp_mean)
+  )
+```
+
+---
+
+# 1. Correlation
+
+## 1.1 Types of Correlation
+
+Correlation measures the extent to which two variables are associated with each other. We distinguish between two main types:
+
+- **Pearson** - parametric, measures linear relationships
+- **Spearman** - non-parametric, measures monotonic relationships
+
+## 1.2 Pearson Correlation
+
+**Research Question:** Is there a relationship between temperature and beer consumption?
+
+**Assumptions:**
+
+1. Linearity
+2. Normality
+3. Homogeneity of variances (homoscedasticity)
+4. Continuous data
+
+```{r pearson-example}
+# Scatterplot to check linearity
+ggplot(beer, aes(x = temp_mean, y = beer_consumption)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+  labs(title = "Temperature and Beer Consumption",
+       subtitle = "Checking linearity assumption",
+       x = "Mean Temperature (°C)", 
+       y = "Beer Consumption (liters)") +
+  theme_minimal()
+```
+
+### Checking Normality
+
+```{r normality-check}
+# Shapiro-Wilk test
+# H0: Data is normally distributed (p > 0.05)
+# H1: Data is not normally distributed (p < 0.05)
+
+shapiro.test(beer$temp_mean)
+shapiro.test(beer$beer_consumption)
+```
+
+### QQ-Plot for Normality
+
+```{r qq-plot, fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+qqnorm(beer$temp_mean, main = "QQ Plot: Mean Temperature")
+qqline(beer$temp_mean, col = "blue")
+qqnorm(beer$beer_consumption, main = "QQ Plot: Beer Consumption")
+qqline(beer$beer_consumption, col = "blue")
+par(mfrow = c(1, 1))
+```
+
+### Checking Homoscedasticity
+
+```{r homoscedasticity}
+model <- lm(beer_consumption ~ temp_mean, data = beer)
+plot(model, which = 1)  # Residuals vs Fitted
+```
+
+### Computing Pearson Correlation
+
+```{r pearson-cor}
+# Temperature and Beer Consumption
+cor.test(beer$temp_mean, beer$beer_consumption, method = "pearson")
+```
+
+### More Correlation Examples
+
+```{r more-correlations}
+# Maximum temperature and consumption
+cor.test(beer$temp_max, beer$beer_consumption, method = "pearson")
+
+# Minimum temperature and consumption
+cor.test(beer$temp_min, beer$beer_consumption, method = "pearson")
+
+# Precipitation and consumption
+cor.test(beer$precipitation, beer$beer_consumption, method = "pearson")
+```
+
+### Correlation Matrix
+
+```{r correlation-matrix}
+# Select numeric variables for correlation matrix
+cor_vars <- beer %>%
+  select(temp_mean, temp_min, temp_max, precipitation, beer_consumption)
+
+# Correlation matrix
+cor_matrix <- cor(cor_vars, use = "complete.obs")
+round(cor_matrix, 2)
+
+# Visualize
+cor_vars %>%
+  cor(use = "complete.obs") %>%
+  as.data.frame() %>%
+  rownames_to_column("var1") %>%
+  pivot_longer(-var1, names_to = "var2", values_to = "correlation") %>%
+  ggplot(aes(x = var1, y = var2, fill = correlation)) +
+  geom_tile() +
+  geom_text(aes(label = round(correlation, 2)), size = 4) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Correlation Matrix: Weather and Beer Consumption", x = "", y = "")
+```
+
+## 1.3 Spearman Correlation
+
+Use Spearman when Pearson assumptions are not met, or when dealing with ordinal data or non-linear monotonic relationships.
+
+**Research Question:** Is there a monotonic relationship between precipitation and beer consumption?
+
+```{r spearman-example}
+# Spearman correlation
+cor.test(beer$precipitation, beer$beer_consumption, method = "spearman")
+
+# Compare Pearson vs Spearman
+cat("Pearson:", cor(beer$temp_mean, beer$beer_consumption), "\n")
+cat("Spearman:", cor(beer$temp_mean, beer$beer_consumption, method = "spearman"))
+```
+
+```{r visualize-by-weekend}
+# Visualize relationship by weekend status
+ggplot(beer, aes(x = temp_mean, y = beer_consumption, color = is_weekend)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(title = "Temperature vs Beer Consumption by Day Type",
+       x = "Mean Temperature (°C)", 
+       y = "Beer Consumption (liters)",
+       color = "") +
+  theme_minimal()
+```
+
+---
+
+# 2. Statistical Tests
+
+## 2.1 Parametric vs Non-parametric
+
+
+
+## 2.2 T-tests
+
+### One-sample t-test
+
+**Research Question:** Is the average beer consumption different from 30 liters (our hypothetical baseline)?
+
+```{r one-sample-ttest}
+# H0: mean = 30
+# H1: mean ≠ 30
+
+t.test(beer$beer_consumption, mu = 30)
+
+# Visualize
+ggplot(beer, aes(x = beer_consumption)) +
+  geom_histogram(binwidth = 2, fill = "steelblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = 30, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = mean(beer$beer_consumption), color = "darkgreen", size = 1) +
+  annotate("text", x = 30.5, y = 60, label = "Hypothetical (26L)", color = "red", hjust = 0) +
+  annotate("text", x = mean(beer$beer_consumption) + 0.5, y = 50, 
+           label = paste("Sample mean:", round(mean(beer$beer_consumption), 2), "L"), 
+           color = "darkgreen", hjust = 0) +
+  labs(title = "Distribution of Daily Beer Consumption",
+       x = "Beer Consumption (liters)", y = "Count") +
+  theme_minimal()
+```
+
+### Independent t-test
+
+**Research Question:** Do people consume more beer on weekends vs weekdays?
+
+```{r independent-ttest}
+# Check assumptions
+# 1. Descriptive statistics by group
+beer %>%
+  group_by(is_weekend) %>%
+  summarise(
+    n = n(),
+    mean = mean(beer_consumption),
+    sd = sd(beer_consumption),
+    se = sd / sqrt(n)
+  )
+
+
+
+# Visualize
+ggplot(beer, aes(x = is_weekend, y = beer_consumption, fill = is_weekend)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.2) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "darkred") +
+  labs(title = "Beer Consumption: Weekday vs Weekend",
+       subtitle = "Diamond represents mean",
+       y = "Beer Consumption (liters)", x = "") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("steelblue", "coral"))
+
+# Independent t-test
+t.test(beer_consumption ~ is_weekend, data = beer)
+```
+
+**Research Question:** Is beer consumption different on rainy vs non-rainy days?
+
+```{r rain-ttest}
+# Create binary rain variable
+beer <- beer %>%
+  mutate(has_rain = if_else(precipitation > 0, "Rainy", "Dry"))
+
+# T-test
+t.test(beer_consumption ~ has_rain, data = beer)
+
+# Visualize
+ggplot(beer, aes(x = has_rain, y = beer_consumption, fill = has_rain)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_violin(alpha = 0.3) +
+  labs(title = "Beer Consumption: Dry vs Rainy Days",
+       y = "Beer Consumption (liters)", x = "") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("goldenrod", "steelblue"))
+```
+
+### Paired t-test
+
+**Research Question:** Does beer consumption increase on weekends?
+
+```{r paired-ttest}
+# Create paired data: match each weekend day with the preceding Friday
+# This is a simulation of paired design for demonstration since we have no expiremental data
+
+set.seed(123)
+n_pairs <- 50
+
+paired_data <- beer %>%
+  group_by(is_weekend) %>%
+  slice_sample(n = n_pairs) %>%
+  ungroup() %>%
+  arrange(is_weekend) %>%
+  mutate(pair_id = rep(1:n_pairs, 2))
+
+# Reshape to wide format
+paired_wide <- paired_data %>%
+  select(pair_id, is_weekend, beer_consumption) %>%
+  pivot_wider(names_from = is_weekend, values_from = beer_consumption)
+
+
+# Paired t-test
+t.test(paired_wide$Weekend, paired_wide$Weekday, paired = TRUE)
+
+# Visualize paired differences
+paired_wide <- paired_wide %>%
+  mutate(difference = Weekend - Weekday)
+
+ggplot(paired_wide, aes(x = difference)) +
+  geom_histogram(binwidth = 2, fill = "steelblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = mean(paired_wide$difference), color = "darkgreen", size = 1) +
+  labs(title = "Paired Differences: Weekend - Weekday Consumption",
+       subtitle = "Positive = higher consumption on weekends",
+       x = "Difference (liters)", y = "Count") +
+  theme_minimal()
+```
+
+## 2.3 Chi-squared Test
+
+Used for **categorical** data to test relationships between variables.
+
+### Chi-squared Test of Independence
+
+**Research Question:** Is there a relationship between temperature category and weekend status?
+
+```{r chi-squared-independence}
+# Create contingency table
+temp_weekend_table <- table(beer$temp_category, beer$is_weekend)
+temp_weekend_table
+
+# Chi-squared test
+chisq.test(temp_weekend_table)
+
+# Visualize
+beer %>%
+  count(temp_category, is_weekend) %>%
+  group_by(is_weekend) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  ggplot(aes(x = temp_category, y = pct, fill = is_weekend)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Temperature Distribution: Weekday vs Weekend",
+       y = "Percentage", x = "Temperature Category", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**Research Question:** Is rain category associated with season?
+
+```{r chi-squared-rain-season}
+# Contingency table
+rain_season_table <- table(beer$rain_category, beer$season)
+rain_season_table
+
+# Chi-squared test
+chisq_result <- chisq.test(rain_season_table)
+chisq_result
+
+# Expected frequencies (should be >= 5)
+round(chisq_result$expected, 1)
+
+# Visualize
+beer %>%
+  count(season, rain_category) %>%
+  group_by(season) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  ggplot(aes(x = season, y = pct, fill = rain_category)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Rain Distribution by Season",
+       y = "Percentage", x = "", fill = "Rain") +
+  scale_fill_brewer(palette = "Blues") +
+  theme_minimal()
+```
+
+### Chi-squared Goodness-of-Fit
+
+**Research Question:** Are observations evenly distributed across days of the week?
+
+```{r chi-squared-goodness}
+# Observed frequencies
+observed <- table(beer$day_of_week)
+observed
+
+# Expected: equal distribution (1/7 each)
+expected_prop <- rep(1/7, 7)
+
+# Goodness-of-fit test
+chisq.test(observed, p = expected_prop)
+
+# Visualize
+day_comparison <- tibble(
+  day = names(observed),
+  observed_pct = as.numeric(observed) / sum(observed) * 100,
+  expected_pct = 100/7
+) %>%
+  pivot_longer(cols = c(observed_pct, expected_pct), 
+               names_to = "type", values_to = "percentage")
+
+ggplot(day_comparison, aes(x = day, y = percentage, fill = type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Observed vs Expected Distribution by Day of Week",
+       y = "Percentage", x = "", fill = "") +
+  scale_fill_manual(values = c("steelblue", "coral"),
+                    labels = c("Expected (uniform)", "Observed")) +
+  theme_minimal()
+```
+
+---
+
+# 3. ANOVA
+
+ANOVA compares means across **3 or more groups**.
+
+## 3.1 One-Way ANOVA
+
+**Research Question:** Does beer consumption differ across seasons?
+
+```{r one-way-anova}
+# Descriptive statistics by group
+beer %>%
+  group_by(season) %>%
+  summarise(
+    n = n(),
+    mean = mean(beer_consumption),
+    sd = sd(beer_consumption),
+    se = sd / sqrt(n)
+  )
+
+# Visualize
+ggplot(beer, aes(x = season, y = beer_consumption, fill = season)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.15) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "darkred") +
+  labs(title = "Beer Consumption by Season",
+       subtitle = "Southern Hemisphere (São Paulo)",
+       y = "Beer Consumption (liters)", x = "") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("coral", "orange", "steelblue", "lightgreen"))
+
+# Check assumptions
+# 1. Normality by group (visual check for large samples)
+ggplot(beer, aes(x = beer_consumption, fill = season)) +
+  geom_histogram(binwidth = 2, alpha = 0.7) +
+  facet_wrap(~season) +
+  theme_minimal()
+
+# 2. Homogeneity of variances
+leveneTest(beer_consumption ~ season, data = beer)
+
+# One-Way ANOVA
+anova_season <- aov(beer_consumption ~ season, data = beer)
+summary(anova_season)
+```
+
+### Post-hoc Tests (Tukey HSD)
+
+```{r posthoc}
+# Which seasons differ from each other?
+TukeyHSD(anova_season)
+
+# Visualize post-hoc results
+tukey_results <- TukeyHSD(anova_season)
+plot(tukey_results, las = 1)
+```
+
+**Research Question:** Does beer consumption differ by temperature category?
+
+```{r anova-temp-category}
+# ANOVA
+anova_temp <- aov(beer_consumption ~ temp_category, data = beer)
+summary(anova_temp)
+
+# Post-hoc
+TukeyHSD(anova_temp)
+
+# Visualize
+ggplot(beer, aes(x = temp_category, y = beer_consumption, fill = temp_category)) +
+  geom_boxplot(alpha = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "darkred") +
+  labs(title = "Beer Consumption by Temperature Category",
+       y = "Beer Consumption (liters)", x = "") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("lightblue", "lightgreen", "orange", "red"))
+```
+
+**Research Question:** Does beer consumption differ by rain intensity?
+
+```{r anova-rain}
+# ANOVA
+anova_rain <- aov(beer_consumption ~ rain_category, data = beer)
+summary(anova_rain)
+
+# Post-hoc
+TukeyHSD(anova_rain)
+
+# Visualize
+ggplot(beer, aes(x = rain_category, y = beer_consumption, fill = rain_category)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Beer Consumption by Rain Intensity",
+       y = "Beer Consumption (liters)", x = "") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_brewer(palette = "Blues")
+```
+
+## 3.2 Two-Way ANOVA
+
+**Research Question:** How do season and weekend status affect beer consumption? Is there an interaction?
+
+```{r two-way-anova}
+# Descriptive statistics
+beer %>%
+  group_by(season, is_weekend) %>%
+  summarise(
+    n = n(),
+    mean_consumption = mean(beer_consumption),
+    sd_consumption = sd(beer_consumption),
+    .groups = "drop"
+  )
+
+# Interaction plot
+ggplot(beer, aes(x = season, y = beer_consumption, color = is_weekend, group = is_weekend)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", linewidth = 1) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  labs(title = "Beer Consumption by Season and Day Type",
+       subtitle = "Interaction Plot (parallel lines = no interaction)",
+       y = "Mean Consumption (liters)", x = "", color = "") +
+  theme_minimal()
+
+# Two-Way ANOVA with interaction
+two_way_anova <- aov(beer_consumption ~ season * is_weekend, data = beer)
+summary(two_way_anova)
+```
+
+### Interpreting Two-Way ANOVA
+
+```{r anova-interpretation}
+# Main effects:
+# - season: effect of season on consumption (averaging across day types)
+# - is_weekend: effect of weekend on consumption (averaging across seasons)
+# 
+# Interaction effect:
+# - season:is_weekend: does the weekend effect differ by season?
+
+# Post-hoc for main effects
+emmeans(two_way_anova, pairwise ~ season)
+emmeans(two_way_anova, pairwise ~ is_weekend)
+
+# Simple effects (if interaction is significant)
+emmeans(two_way_anova, pairwise ~ is_weekend | season)
+```
+
+**Research Question:** How do temperature category and rain affect consumption?
+
+```{r two-way-temp-rain}
+# Two-way ANOVA: temperature category and rain
+temp_rain_anova <- aov(beer_consumption ~ temp_category * has_rain, data = beer)
+summary(temp_rain_anova)
+
+# Interaction plot
+ggplot(beer, aes(x = temp_category, y = beer_consumption, color = has_rain, group = has_rain)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line", linewidth = 1) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  labs(title = "Beer Consumption by Temperature and Rain",
+       y = "Mean Consumption (liters)", x = "Temperature Category", color = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+
+
+
+# 4. Practice Exercises
+
+Using the `beer` dataset:
+
+## Exercise 1: Correlation
+Calculate both Pearson and Spearman correlations between `temp_max` and `beer_consumption`. Check the assumptions.
+
+## Exercise 2: T-test
+Create a "hot day" variable (temp_mean > 27°C) and test whether consumption differs on hot vs normal days.
+
+## Exercise 3: Chi-squared
+Test if there is a relationship between `season` and `is_weekend` (are weekends distributed equally across seasons?).
+
+## Exercise 4: ANOVA
+Compare beer consumption across different `quarter_label` groups. Run post-hoc tests if significant.
+
+## Exercise 5: Two-Way ANOVA
+Test whether consumption differs by `rain_category` and `is_weekend`. Check for interaction effects.
+
+```{r practice-space}
+# Exercise 1: Correlation
+
+
+# Exercise 2: T-test
+
+
+# Exercise 3: Chi-squared
+
+
+# Exercise 4: One-Way ANOVA
+
+
+# Exercise 5: Two-Way ANOVA
+
+```
+

@@ -1,0 +1,802 @@
+---
+title: "Seminar 3"
+subtitle: "Linear Regression"
+author: "Ilya Lyapin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    df_print: paged
+    number_sections: true
+---
+
+# Introduction
+
+## About TIMSS Data
+
+**TIMSS** (Trends in International Mathematics and Science Study) is the largest international comparative study of mathematics and science education quality, conducted by the International Association for the Evaluation of Educational Achievement (IEA) every 4 years.
+
+In this workshop, we work with **TIMSS 2015** data for 8th-grade students. The file `BSGSGPM6.sav` contains student questionnaire data, including:
+
+- **Academic achievement** (mathematics and science scores)
+- **Socio-demographic characteristics** (gender, age, migration status)
+- **Family socioeconomic status** (parental education, home resources)
+- **Attitudes toward learning** (motivation, confidence, interest)
+- **School climate** (sense of belonging, bullying)
+
+## Research Questions
+
+In sociology of education, a key question is: **what factors determine academic achievement?**
+
+We will explore:
+
+1. How does family socioeconomic status affect mathematics achievement?
+2. What role does student confidence play?
+3. **Does the effect of home resources differ for boys and girls?**
+4. How does parental education moderate the influence of other factors?
+
+## What is Linear Regression?
+
+**Linear regression** is a statistical method for studying relationships between variables and predicting values of a dependent variable.
+
+$$Y = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + ... + \beta_k X_k + \epsilon$$
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Demonstration example
+set.seed(42)
+n <- 40
+x_demo <- runif(n, 1, 10)
+y_demo <- 300 + 25 * x_demo + rnorm(n, 0, 30)
+demo_df <- data.frame(x = x_demo, y = y_demo)
+
+# Model for demonstration
+demo_model <- lm(y ~ x, data = demo_df)
+demo_df$fitted <- fitted(demo_model)
+demo_df$resid <- residuals(demo_model)
+
+ggplot(demo_df, aes(x = x, y = y)) +
+  geom_segment(aes(xend = x, yend = fitted), color = "#E74C3C", alpha = 0.5, linetype = "dashed") +
+  geom_point(size = 3, color = "#2C3E50", alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#3498DB", linewidth = 1.2) +
+  labs(
+    title = "Linear Regression: Minimizing the Sum of Squared Residuals",
+    subtitle = "Red lines represent residuals (prediction errors)",
+    x = "Independent Variable (X)",
+    y = "Dependent Variable (Y)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40")
+  )
+```
+
+---
+
+# Loading and Preparing Data
+
+## Reading the SPSS File
+
+```{r load-data}
+library(haven)       
+library(ggplot2)     
+library(dplyr)       
+library(car)         
+library(scales)      
+library(reshape2)    
+
+# Load TIMSS data
+timss_raw <- read_sav("BSGSGPM6.sav")
+
+cat("Dataset size:", nrow(timss_raw), "observations,", ncol(timss_raw), "variables\n")
+```
+
+## Selecting and Preparing Variables
+
+```{r select-variables}
+# Select key variables for analysis
+timss <- timss_raw %>%
+  transmute(
+    # Identifiers
+    country = as.numeric(IDCNTRY),
+    student_id = IDSTUD,
+    
+    # Dependent variable: mathematics score (first plausible value)
+    math_score = BSMMAT01,
+    
+    # Sex (1 = girl, 2 = boy in TIMSS)
+    sex = as.numeric(ITSEX),
+    female = ifelse(sex == 1, 1, 0),
+    
+    # Age
+    age = BSDAGE,
+    
+    # Number of books at home (BSBG04)
+    # 1 = 0-10, 2 = 11-25, 3 = 26-100, 4 = 101-200, 5 = more than 200
+    books_home = as.numeric(BSBG04),
+    
+    # Home resources index - Home Educational Resources
+    home_resources = BSDGHER,
+    
+    # Parental education index
+    parent_education = BSDGEDUP,
+    
+    # Attitude toward mathematics - "Like Learning Mathematics" scale
+    like_math = BSBGEML,
+    
+    # Confidence in mathematics
+    confident_math = BSBGSCM,
+    
+    # Value of mathematics
+    value_math = BSBGSVM,
+    
+    # Sense of school belonging
+    school_belonging = BSBGSSB,
+    
+    # School safety/bullying (reverse scale - higher = less bullying)
+    school_safety = BSBGSB,
+    
+    # School attendance frequency (BSBG11)
+    # 1 = once a week, 2 = once every two weeks, 3 = once a month, 4 = never/almost never
+    attendance = as.numeric(BSBG11),
+    
+    # Weights for analysis
+    weight = TOTWGT
+  )
+
+# Check structure
+glimpse(timss)
+```
+
+## Variable Descriptions
+
+```{r variables-table}
+var_description <- data.frame(
+  Variable = c("math_score", "female", "age", "books_home", "home_resources",
+               "parent_education", "like_math", "confident_math", "value_math",
+               "school_belonging", "school_safety", "attendance"),
+  Description = c(
+    "Mathematics score (plausible value 1)",
+    "Sex: 1 = female, 0 = male",
+    "Student age (years)",
+    "Number of books at home (1-5, ordinal)",
+    "Home educational resources index (scale)",
+    "Parental education index (scale)",
+    "Like learning mathematics (scale, higher = more)",
+    "Confidence in mathematics (scale, higher = more)",
+    "Value of mathematics (scale, higher = more)",
+    "Sense of school belonging (scale)",
+    "School safety (scale, higher = safer)",
+    "Attendance (1-4, higher = better)"
+  ),
+  Type = c("Continuous", "Binary", rep("Continuous", 10))
+)
+
+knitr::kable(var_description, caption = "Table 1: Description of Variables for Analysis")
+```
+
+## Handling Missing Values
+
+```{r missing-values}
+# Check missing values
+missing_summary <- data.frame(
+  Variable = names(timss),
+  Missing = sapply(timss, function(x) sum(is.na(x))),
+  Percent = round(sapply(timss, function(x) mean(is.na(x)) * 100), 1)
+)
+
+# Show only variables with missing values
+missing_summary %>%
+  filter(Missing > 0) %>%
+  arrange(desc(Percent)) %>%
+  knitr::kable(caption = "Table 2: Variables with Missing Values")
+```
+
+```{r clean-data}
+# Create analytical dataset without missing values in key variables
+timss_clean <- timss %>%
+  filter(
+    !is.na(math_score),
+    !is.na(female),
+    !is.na(home_resources),
+    !is.na(confident_math),
+    !is.na(like_math)
+  )
+
+cat("After removing missing values:", nrow(timss_clean), "observations\n")
+cat("Percentage of data retained:", round(nrow(timss_clean)/nrow(timss)*100, 1), "%\n")
+```
+
+## Descriptive Statistics
+
+```{r descriptive-stats}
+# Descriptive statistics for key variables
+desc_vars <- c("math_score", "home_resources", "confident_math", "like_math", "value_math")
+
+desc_stats <- timss_clean %>%
+  select(all_of(desc_vars)) %>%
+  summarise(across(everything(), list(
+    N = ~sum(!is.na(.)),
+    Mean = ~mean(., na.rm = TRUE),
+    SD = ~sd(., na.rm = TRUE),
+    Min = ~min(., na.rm = TRUE),
+    Max = ~max(., na.rm = TRUE)
+  ))) %>%
+  pivot_longer(everything(), names_to = c("Variable", "Statistic"), names_sep = "_") %>%
+  pivot_wider(names_from = Statistic, values_from = value)
+
+knitr::kable(desc_stats, digits = 2, caption = "Table 3: Descriptive Statistics")
+```
+
+```{r distribution-plot, fig.cap="Figure 2: Distribution of Mathematics Scores"}
+ggplot(timss_clean, aes(x = math_score)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, 
+                 fill = "#3498DB", color = "white", alpha = 0.7) +
+  geom_density(color = "#E74C3C", linewidth = 1.2) +
+  geom_vline(aes(xintercept = mean(math_score)), 
+             color = "#2C3E50", linewidth = 1, linetype = "dashed") +
+  annotate("text", x = mean(timss_clean$math_score) + 30, y = 0.004, 
+           label = paste("M =", round(mean(timss_clean$math_score), 1)),
+           color = "#2C3E50", fontface = "bold") +
+  labs(
+    title = "Distribution of Mathematics Scores (TIMSS 2015)",
+    subtitle = "TIMSS international average = 500, SD = 100",
+    x = "Mathematics Score",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40")
+  )
+```
+
+---
+
+# Simple Linear Regression
+
+## Visual Analysis of Relationships
+
+```{r bivariate-plots, fig.height=8, fig.cap="Figure 3: Relationship Between Math Achievement and Key Predictors"}
+# Create plots for several predictors
+p1 <- ggplot(timss_clean, aes(x = home_resources, y = math_score)) +
+  geom_point(alpha = 0.3, color = "#3498DB") +
+  geom_smooth(method = "lm", color = "#E74C3C", se = TRUE) +
+  labs(title = "Home Resources", x = "Resources Index", y = "Score") +
+  theme_minimal()
+
+p2 <- ggplot(timss_clean, aes(x = confident_math, y = math_score)) +
+  geom_point(alpha = 0.3, color = "#3498DB") +
+  geom_smooth(method = "lm", color = "#E74C3C", se = TRUE) +
+  labs(title = "Confidence in Mathematics", x = "Confidence Index", y = "Score") +
+  theme_minimal()
+
+p3 <- ggplot(timss_clean, aes(x = like_math, y = math_score)) +
+  geom_point(alpha = 0.3, color = "#3498DB") +
+  geom_smooth(method = "lm", color = "#E74C3C", se = TRUE) +
+  labs(title = "Like Mathematics", x = "Index", y = "Score") +
+  theme_minimal()
+
+p4 <- ggplot(timss_clean, aes(x = factor(female), y = math_score)) +
+  geom_boxplot(fill = c("#3498DB", "#E74C3C"), alpha = 0.7) +
+  scale_x_discrete(labels = c("Boys", "Girls")) +
+  labs(title = "Gender Differences", x = "", y = "Score") +
+  theme_minimal()
+
+# Combine plots
+library(gridExtra)
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+## Model 1: Simple Regression
+
+Let's start with the simplest model: the effect of mathematics confidence on achievement.
+
+```{r simple-model}
+# Simple linear regression
+model1 <- lm(math_score ~ confident_math, data = timss_clean)
+
+summary(model1)
+```
+
+## Interpreting Coefficients
+
+```{r interpret-simple, fig.cap="Figure 4: Visualization of Simple Regression with Equation"}
+coef1 <- coef(model1)
+
+ggplot(timss_clean, aes(x = confident_math, y = math_score)) +
+  geom_point(alpha = 0.2, color = "#3498DB") +
+  geom_smooth(method = "lm", color = "#E74C3C", linewidth = 1.2, se = TRUE, fill = "#E74C3C", alpha = 0.2) +
+  annotate("text", x = min(timss_clean$confident_math, na.rm = TRUE) + 1, 
+           y = max(timss_clean$math_score, na.rm = TRUE) - 20,
+           label = paste0("Y = ", round(coef1[1], 1), " + ", round(coef1[2], 1), " × X"),
+           size = 5, fontface = "bold", hjust = 0) +
+  annotate("text", x = min(timss_clean$confident_math, na.rm = TRUE) + 1, 
+           y = max(timss_clean$math_score, na.rm = TRUE) - 50,
+           label = paste0("R² = ", round(summary(model1)$r.squared, 3)),
+           size = 4, hjust = 0, color = "gray30") +
+  labs(
+    title = "Effect of Confidence on Mathematics Achievement",
+    subtitle = paste0("For each 1-unit increase in confidence, score increases by ", 
+                      round(coef1[2], 1), " points"),
+    x = "Confidence in Mathematics (Index)",
+    y = "Mathematics Score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40")
+  )
+```
+
+**Interpretation:**
+
+- **Intercept (β₀)**: Expected score when confidence equals zero (extrapolation)
+- **confident_math (β₁)**: For each 1-unit increase in confidence index, expected math score increases by `r round(coef1[2], 1)` points
+- **R²**: The model explains `r round(summary(model1)$r.squared * 100, 1)`% of variation in scores
+
+---
+
+# Multiple Linear Regression
+
+## Model 2: Adding Predictors
+
+```{r multiple-model}
+# Multiple regression
+model2 <- lm(math_score ~ confident_math + home_resources + like_math + female, 
+             data = timss_clean)
+
+summary(model2)
+```
+
+## Comparing Models
+
+```{r compare-models, fig.cap="Figure 5: Comparison of Model Explanatory Power"}
+# Compare R²
+r2_comparison <- data.frame(
+  Model = c("Model 1\n(confidence only)", "Model 2\n(4 predictors)"),
+  R2 = c(summary(model1)$r.squared, summary(model2)$r.squared),
+  Adj_R2 = c(summary(model1)$adj.r.squared, summary(model2)$adj.r.squared)
+)
+
+ggplot(r2_comparison, aes(x = Model, y = R2)) +
+  geom_bar(stat = "identity", fill = "#3498DB", width = 0.6, color = "white") +
+  geom_text(aes(label = paste0(round(R2 * 100, 1), "%")), 
+            vjust = -0.5, size = 5, fontface = "bold") +
+  scale_y_continuous(limits = c(0, 0.5), labels = percent) +
+  labs(
+    title = "Increase in Model Explanatory Power",
+    subtitle = "Adding predictors improves explanation of variance",
+    y = "R² (proportion of explained variance)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40")
+  )
+```
+
+## Visualizing Coefficients
+
+```{r coef-plot, fig.cap="Figure 6: Multiple Regression Coefficients with 95% CI"}
+# Extract coefficients (without intercept)
+coef_df <- data.frame(
+  Variable = c("Confidence in Math", "Home Resources", 
+               "Like Mathematics", "Sex (Female)"),
+  Estimate = coef(model2)[-1],
+  SE = summary(model2)$coefficients[-1, 2],
+  p_value = summary(model2)$coefficients[-1, 4]
+)
+coef_df$lower <- coef_df$Estimate - 1.96 * coef_df$SE
+coef_df$upper <- coef_df$Estimate + 1.96 * coef_df$SE
+coef_df$Significance <- ifelse(coef_df$p_value < 0.05, "p < 0.05", "p ≥ 0.05")
+
+# Sort by magnitude
+coef_df <- coef_df[order(coef_df$Estimate), ]
+coef_df$Variable <- factor(coef_df$Variable, levels = coef_df$Variable)
+
+ggplot(coef_df, aes(x = Variable, y = Estimate, color = Significance)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_pointrange(aes(ymin = lower, ymax = upper), size = 1, linewidth = 1.2) +
+  scale_color_manual(values = c("p < 0.05" = "#E74C3C", "p ≥ 0.05" = "#BDC3C7")) +
+  coord_flip() +
+  labs(
+    title = "Multiple Regression Coefficients",
+    subtitle = "Effect of each predictor controlling for others",
+    x = "",
+    y = "Unstandardized Coefficient β"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+## Interpreting Multiple Regression
+
+```{r interpretation-multiple}
+coef2 <- coef(model2)
+cat("Multiple Regression Equation:\n\n")
+cat("Math_Score =", round(coef2[1], 1), "\n")
+cat("            +", round(coef2[2], 2), "× Confidence\n")
+cat("            +", round(coef2[3], 2), "× Home_Resources\n")
+cat("            +", round(coef2[4], 2), "× Like_Math\n")
+cat("            +", round(coef2[5], 2), "× Female\n")
+```
+
+**Key Findings:**
+
+1. **Confidence in mathematics** — strongest predictor: +1 unit → +`r round(coef2[2], 1)` points
+2. **Home resources** — significant SES effect: +1 unit → +`r round(coef2[3], 1)` points
+3. **Gender gap**: girls score on average `r abs(round(coef2[5], 1))` points `r ifelse(coef2[5] < 0, "lower", "higher")` controlling for other variables
+
+---
+
+# Interaction Effects
+
+## What is an Interaction?
+
+An **interaction effect** occurs when the effect of one variable on the dependent variable **depends on the value of another variable**.
+
+For example: *"The effect of home resources on achievement may differ for boys and girls"*
+
+```{r interaction-concept, fig.cap="Figure 7: Conceptual Illustration of an Interaction Effect"}
+# Create illustrative data
+set.seed(123)
+n_demo <- 200
+demo_interaction <- data.frame(
+  x = rep(seq(1, 10, length.out = 100), 2),
+  group = rep(c("Group A", "Group B"), each = 100)
+)
+demo_interaction$y <- ifelse(
+  demo_interaction$group == "Group A",
+  200 + 30 * demo_interaction$x + rnorm(100, 0, 20),  # Strong effect
+  200 + 10 * demo_interaction$x + rnorm(100, 0, 20)   # Weak effect
+)
+
+ggplot(demo_interaction, aes(x = x, y = y, color = group)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.5) +
+  scale_color_manual(values = c("#E74C3C", "#3498DB")) +
+  labs(
+    title = "Interaction Effect: Different Slopes for Different Groups",
+    subtitle = "The slope for Group A is steeper than for Group B",
+    x = "Predictor (X)",
+    y = "Dependent Variable (Y)",
+    color = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+**Mathematical Formulation:**
+
+$$Y = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \beta_3 (X_1 \times X_2) + \epsilon$$
+
+Where $\beta_3$ is the interaction coefficient, showing how the effect of $X_1$ changes as $X_2$ changes.
+
+## Research Question
+
+**Does the effect of home educational resources on mathematics achievement differ for boys and girls?**
+
+Hypotheses:
+
+- $H_0$: The effect of home resources is the same for both sexes ($\beta_{interaction} = 0$)
+- $H_1$: The effect of home resources differs by sex ($\beta_{interaction} \neq 0$)
+
+## Visual Check for Interaction
+
+```{r interaction-visual-check, fig.cap="Figure 8: Checking for Interaction — Are the Slopes Different?"}
+# Create sex label as factor
+timss_clean$sex_label <- factor(timss_clean$female, labels = c("Boys", "Girls"))
+
+ggplot(timss_clean, aes(x = home_resources, y = math_score, color = sex_label)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
+  scale_color_manual(values = c("Boys" = "#3498DB", "Girls" = "#E74C3C")) +
+  labs(
+    title = "Home Resources and Math Achievement by Sex",
+    subtitle = "If lines are not parallel — there is an interaction effect",
+    x = "Home Educational Resources Index",
+    y = "Mathematics Score",
+    color = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+## Model 3: With Interaction Effect
+
+```{r interaction-model}
+# Model with sex × home resources interaction
+model3 <- lm(math_score ~ confident_math + home_resources * female + like_math, 
+             data = timss_clean)
+
+summary(model3)
+```
+
+## Interpreting the Interaction Coefficient
+
+```{r interpret-interaction}
+coef3 <- coef(model3)
+interaction_coef <- coef3["home_resources:female"]
+
+cat("=== Interpretation of Interaction Effect ===\n\n")
+cat("Interaction coefficient (home_resources:female):", round(interaction_coef, 2), "\n\n")
+
+if(!is.na(interaction_coef)) {
+  cat("For BOYS (female = 0):\n")
+  cat("  Effect of home resources =", round(coef3["home_resources"], 2), "\n\n")
+  
+  cat("For GIRLS (female = 1):\n")
+  cat("  Effect of home resources =", round(coef3["home_resources"] + interaction_coef, 2), "\n")
+  cat("  (base effect + interaction:", round(coef3["home_resources"], 2), "+", 
+      round(interaction_coef, 2), ")\n\n")
+  
+  if(interaction_coef > 0) {
+    cat("Conclusion: Home resources have a STRONGER effect on GIRLS' achievement\n")
+  } else {
+    cat("Conclusion: Home resources have a STRONGER effect on BOYS' achievement\n")
+  }
+}
+```
+
+```{r interaction-visualization, fig.cap="Figure 9: Visualization of Interaction Effect — Predicted Values"}
+# Create data for visualizing predicted values
+pred_data <- expand.grid(
+  home_resources = seq(min(timss_clean$home_resources, na.rm = TRUE),
+                       max(timss_clean$home_resources, na.rm = TRUE),
+                       length.out = 50),
+  female = c(0, 1),
+  confident_math = mean(timss_clean$confident_math, na.rm = TRUE),
+  like_math = mean(timss_clean$like_math, na.rm = TRUE)
+)
+
+pred_data$predicted <- predict(model3, newdata = pred_data)
+pred_data$sex_label <- factor(pred_data$female, labels = c("Boys", "Girls"))
+
+ggplot(pred_data, aes(x = home_resources, y = predicted, color = sex_label)) +
+  geom_line(linewidth = 1.5) +
+  scale_color_manual(values = c("Boys" = "#3498DB", "Girls" = "#E74C3C")) +
+  labs(
+    title = "Predicted Mathematics Scores",
+    subtitle = "At mean values of confidence and liking mathematics",
+    x = "Home Educational Resources Index",
+    y = "Predicted Score",
+    color = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+## Other Interaction Examples
+
+### Interaction Between Two Continuous Variables
+
+```{r interaction-continuous}
+# Interaction: confidence × home resources
+model4 <- lm(math_score ~ confident_math * home_resources + female + like_math, 
+             data = timss_clean)
+
+summary(model4)
+```
+
+```{r interaction-continuous-plot, fig.cap="Figure 10: Interaction Between Two Continuous Variables"}
+# Visualization at different levels of home resources
+# Create home resources categories
+timss_clean$resources_cat <- cut(timss_clean$home_resources,
+                                  breaks = quantile(timss_clean$home_resources, 
+                                                   probs = c(0, 0.33, 0.66, 1), na.rm = TRUE),
+                                  labels = c("Low", "Medium", "High"),
+                                  include.lowest = TRUE)
+
+ggplot(timss_clean %>% filter(!is.na(resources_cat)), 
+       aes(x = confident_math, y = math_score, color = resources_cat)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.2) +
+  scale_color_manual(values = c("Low" = "#E74C3C", "Medium" = "#F39C12", "High" = "#27AE60")) +
+  labs(
+    title = "Effect of Confidence at Different Levels of Home Resources",
+    subtitle = "Different slopes = interaction effect",
+    x = "Confidence in Mathematics",
+    y = "Mathematics Score",
+    color = "Home Resources"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+## Comparing Models With and Without Interaction
+
+```{r anova-comparison}
+# ANOVA for comparing nested models
+anova_result <- anova(model2, model3)
+print(anova_result)
+```
+
+```{r model-comparison-table}
+# Model comparison table
+model_comparison <- data.frame(
+  Model = c("Model 2 (no interaction)", "Model 3 (with interaction)"),
+  R2 = c(summary(model2)$r.squared, summary(model3)$r.squared),
+  Adj_R2 = c(summary(model2)$adj.r.squared, summary(model3)$adj.r.squared),
+  AIC = c(AIC(model2), AIC(model3)),
+  BIC = c(BIC(model2), BIC(model3))
+)
+
+knitr::kable(model_comparison, digits = 3, 
+             caption = "Table 4: Comparison of Models With and Without Interaction")
+```
+
+---
+
+# Model Diagnostics
+
+## Assumptions of Linear Regression
+
+```{r assumptions-diagram, fig.cap="Figure 11: Key Assumptions of Linear Regression"}
+# Create assumptions infographic
+assumptions_df <- data.frame(
+  Assumption = c("Linearity", "Normality of\nResiduals", "Homoscedasticity", 
+                 "Independence", "No\nMulticollinearity"),
+  x = c(1, 2, 3, 4, 5),
+  y = rep(1, 5)
+)
+
+ggplot(assumptions_df, aes(x = x, y = y)) +
+  geom_point(size = 20, color = "#3498DB", alpha = 0.7) +
+  geom_text(aes(label = Assumption), size = 3.5, fontface = "bold") +
+  scale_x_continuous(limits = c(0, 6)) +
+  labs(title = "5 Key Assumptions of Linear Regression") +
+  theme_void(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 16))
+```
+
+## Diagnostic Plots
+
+```{r diagnostic-plots, fig.height=10, fig.cap="Figure 12: Standard Diagnostic Plots"}
+par(mfrow = c(2, 2))
+plot(model3)
+par(mfrow = c(1, 1))
+```
+
+## Residual Analysis
+
+```{r residuals-analysis, fig.cap="Figure 13: Analysis of Residual Distribution"}
+# Save diagnostic values
+timss_diag <- timss_clean %>%
+  filter(!is.na(confident_math) & !is.na(home_resources) & !is.na(like_math))
+
+timss_diag$fitted <- fitted(model3)
+timss_diag$residuals <- residuals(model3)
+timss_diag$std_resid <- rstandard(model3)
+
+# Histogram of residuals
+p1 <- ggplot(timss_diag, aes(x = residuals)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50, 
+                 fill = "#3498DB", color = "white", alpha = 0.7) +
+  geom_density(color = "#E74C3C", linewidth = 1) +
+  stat_function(fun = dnorm, args = list(mean = 0, sd = sd(timss_diag$residuals)),
+                color = "#2C3E50", linewidth = 1, linetype = "dashed") +
+  labs(title = "Distribution of Residuals", x = "Residuals", y = "Density") +
+  theme_minimal()
+
+# Q-Q plot
+p2 <- ggplot(timss_diag, aes(sample = std_resid)) +
+  stat_qq(alpha = 0.3, color = "#3498DB") +
+  stat_qq_line(color = "#E74C3C", linewidth = 1) +
+  labs(title = "Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+## Checking Multicollinearity (VIF)
+
+```{r vif-analysis, fig.cap="Figure 14: Multicollinearity Analysis"}
+# For model without interaction (VIF for interactions is difficult to interpret)
+vif_values <- vif(model2)
+
+vif_df <- data.frame(
+  Variable = names(vif_values),
+  VIF = as.numeric(vif_values)
+)
+vif_df$Status <- ifelse(vif_df$VIF < 5, "✓ OK", 
+                        ifelse(vif_df$VIF < 10, "⚠ Caution", "✗ Problem"))
+
+ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF, fill = VIF > 5)) +
+  geom_bar(stat = "identity", width = 0.7, color = "white") +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "#E74C3C", linewidth = 1) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "#C0392B", linewidth = 1) +
+  scale_fill_manual(values = c("FALSE" = "#27AE60", "TRUE" = "#E74C3C")) +
+  coord_flip() +
+  labs(
+    title = "Variance Inflation Factor (VIF)",
+    subtitle = "VIF < 5: acceptable | VIF 5-10: concerning | VIF > 10: serious problem",
+    x = "", y = "VIF"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "none"
+  )
+
+knitr::kable(vif_df, digits = 2, caption = "Table 5: VIF Values for Predictors")
+```
+
+---
+
+# Standardized Coefficients
+
+## Why Standardize?
+
+Unstandardized coefficients depend on the units of measurement. To compare the **relative importance** of predictors, we use **standardized (beta) coefficients**.
+
+```{r standardized-coef, fig.cap="Figure 15: Standardized Coefficients — Comparing Predictor Importance"}
+# Standardize variables
+timss_std <- timss_clean %>%
+  mutate(across(c(math_score, confident_math, home_resources, like_math), scale))
+
+# Model on standardized data
+model_std <- lm(math_score ~ confident_math + home_resources + like_math + female, 
+                data = timss_std)
+
+# Extract beta coefficients
+beta_coefs <- coef(model_std)[-1]
+beta_df <- data.frame(
+  Variable = c("Confidence", "Home Resources", "Like Mathematics", "Sex (Female)"),
+  Beta = beta_coefs
+)
+beta_df$Direction <- ifelse(beta_df$Beta > 0, "Positive", "Negative")
+beta_df <- beta_df[order(abs(beta_df$Beta), decreasing = TRUE), ]
+beta_df$Variable <- factor(beta_df$Variable, levels = beta_df$Variable)
+
+ggplot(beta_df, aes(x = Variable, y = Beta, fill = Direction)) +
+  geom_bar(stat = "identity", width = 0.7, color = "white") +
+  geom_hline(yintercept = 0, linewidth = 1) +
+  scale_fill_manual(values = c("Positive" = "#27AE60", "Negative" = "#E74C3C")) +
+  coord_flip() +
+  labs(
+    title = "Standardized Coefficients (β)",
+    subtitle = "Allow comparison of relative predictor importance",
+    x = "",
+    y = "Standardized Coefficient"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40"),
+    legend.position = "bottom"
+  )
+```
+
+**Interpretation:** For each 1 standard deviation increase in the predictor, the dependent variable changes by β standard deviations.
+
